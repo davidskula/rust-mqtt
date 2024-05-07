@@ -1,3 +1,4 @@
+use embedded_io::ReadReady;
 use embedded_io_async::{Read, Write};
 use heapless::Vec;
 use rand_core::RngCore;
@@ -50,7 +51,7 @@ where
 
 impl<'a, T, const MAX_PROPERTIES: usize, R> RawMqttClient<'a, T, MAX_PROPERTIES, R>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
     R: RngCore,
 {
     pub fn new(
@@ -71,12 +72,12 @@ where
         }
     }
 
-    async fn connect_to_broker_v5<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    async fn connect_to_broker_v5(&mut self) -> Result<(), ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
         }
         let len = {
-            let mut connect = ConnectPacket::<'b, MAX_PROPERTIES, 0>::new();
+            let mut connect = ConnectPacket::<MAX_PROPERTIES, 0>::new();
             connect.keep_alive = self.config.keep_alive;
             self.config.add_max_packet_size_as_prop();
             connect.property_len = connect.add_properties(&self.config.properties);
@@ -112,20 +113,20 @@ where
     /// in the `ClientConfig`. Method selects proper implementation of the MQTT version based on the config.
     /// If the connection to the broker fails, method returns Err variable that contains
     /// Reason codes returned from the broker.
-    pub async fn connect_to_broker<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    pub async fn connect_to_broker(&mut self) -> Result<(), ReasonCode> {
         match self.config.mqtt_version {
             MqttVersion::MQTTv3 => Err(ReasonCode::UnsupportedProtocolVersion),
             MqttVersion::MQTTv5 => self.connect_to_broker_v5().await,
         }
     }
 
-    async fn disconnect_v5<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    async fn disconnect_v5(&mut self) -> Result<(), ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
         }
         let conn = self.connection.as_mut().unwrap();
         trace!("Creating disconnect packet!");
-        let mut disconnect = DisconnectPacket::<'b, MAX_PROPERTIES>::new();
+        let mut disconnect = DisconnectPacket::<MAX_PROPERTIES>::new();
         let len = disconnect.encode(self.buffer, self.buffer_len);
         if let Err(err) = len {
             warn!("[DECODE ERR]: {}", err);
@@ -146,17 +147,17 @@ where
     /// in the `ClientConfig`. Method selects proper implementation of the MQTT version based on the config.
     /// If the disconnect from the broker fails, method returns Err variable that contains
     /// Reason codes returned from the broker.
-    pub async fn disconnect<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    pub async fn disconnect(&mut self) -> Result<(), ReasonCode> {
         match self.config.mqtt_version {
             MqttVersion::MQTTv3 => Err(ReasonCode::UnsupportedProtocolVersion),
             MqttVersion::MQTTv5 => self.disconnect_v5().await,
         }
     }
 
-    async fn send_message_v5<'b>(
-        &'b mut self,
-        topic_name: &'b str,
-        message: &'b [u8],
+    async fn send_message_v5(
+        &mut self,
+        topic_name: &str,
+        message: &[u8],
         qos: QualityOfService,
         retain: bool,
     ) -> Result<u16, ReasonCode> {
@@ -167,7 +168,7 @@ where
         let identifier: u16 = self.config.rng.next_u32() as u16;
         //self.rng.next_u32() as u16;
         let len = {
-            let mut packet = PublishPacket::<'b, MAX_PROPERTIES>::new();
+            let mut packet = PublishPacket::<MAX_PROPERTIES>::new();
             packet.add_topic_name(topic_name);
             packet.add_qos(qos);
             packet.add_identifier(identifier);
@@ -189,10 +190,10 @@ where
     /// message from the parameter `message` to the topic `topic_name` on the broker
     /// specified in the ClientConfig. If the send fails method returns Err with reason code
     /// received by broker.
-    pub async fn send_message<'b>(
-        &'b mut self,
-        topic_name: &'b str,
-        message: &'b [u8],
+    pub async fn send_message(
+        &mut self,
+        topic_name: &str,
+        message: &[u8],
         qos: QualityOfService,
         retain: bool,
     ) -> Result<u16, ReasonCode> {
@@ -202,9 +203,9 @@ where
         }
     }
 
-    async fn subscribe_to_topics_v5<'b, const TOPICS: usize>(
-        &'b mut self,
-        topic_names: &'b Vec<&'b str, TOPICS>,
+    async fn subscribe_to_topics_v5<const TOPICS: usize>(
+        &mut self,
+        topic_names: &Vec<&str, TOPICS>,
     ) -> Result<u16, ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
@@ -212,7 +213,7 @@ where
         let conn = self.connection.as_mut().unwrap();
         let identifier: u16 = self.config.rng.next_u32() as u16;
         let len = {
-            let mut subs = SubscriptionPacket::<'b, TOPICS, MAX_PROPERTIES>::new();
+            let mut subs = SubscriptionPacket::<TOPICS, MAX_PROPERTIES>::new();
             subs.packet_identifier = identifier;
             for topic_name in topic_names.iter() {
                 subs.add_new_filter(topic_name, self.config.max_subscribe_qos);
@@ -234,9 +235,9 @@ where
     /// `topic_names` on the broker specified in the `ClientConfig`. Generics `TOPICS`
     /// sets the value of the `topics_names` vector. MQTT protocol implementation
     /// is selected automatically.
-    pub async fn subscribe_to_topics<'b, const TOPICS: usize>(
-        &'b mut self,
-        topic_names: &'b Vec<&'b str, TOPICS>,
+    pub async fn subscribe_to_topics<const TOPICS: usize>(
+        &mut self,
+        topic_names: &Vec<&str, TOPICS>,
     ) -> Result<u16, ReasonCode> {
         match self.config.mqtt_version {
             MqttVersion::MQTTv3 => Err(ReasonCode::UnsupportedProtocolVersion),
@@ -247,9 +248,9 @@ where
     /// Method allows client unsubscribe from the topic specified in the parameter
     /// `topic_name` on the broker from the `ClientConfig`. MQTT protocol implementation
     /// is selected automatically.
-    pub async fn unsubscribe_from_topic<'b>(
-        &'b mut self,
-        topic_name: &'b str,
+    pub async fn unsubscribe_from_topic(
+        &mut self,
+        topic_name: &str,
     ) -> Result<u16, ReasonCode> {
         match self.config.mqtt_version {
             MqttVersion::MQTTv3 => Err(ReasonCode::UnsupportedProtocolVersion),
@@ -257,9 +258,9 @@ where
         }
     }
 
-    async fn unsubscribe_from_topic_v5<'b>(
-        &'b mut self,
-        topic_name: &'b str,
+    async fn unsubscribe_from_topic_v5(
+        &mut self,
+        topic_name: &str,
     ) -> Result<u16, ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
@@ -268,7 +269,7 @@ where
         let identifier = self.config.rng.next_u32() as u16;
 
         let len = {
-            let mut unsub = UnsubscriptionPacket::<'b, 1, MAX_PROPERTIES>::new();
+            let mut unsub = UnsubscriptionPacket::<1, MAX_PROPERTIES>::new();
             unsub.packet_identifier = identifier;
             unsub.add_new_filter(topic_name);
             unsub.encode(self.buffer, self.buffer_len)
@@ -283,7 +284,7 @@ where
         Ok(identifier)
     }
 
-    async fn send_ping_v5<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    async fn send_ping_v5(&mut self) -> Result<(), ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
         }
@@ -306,14 +307,18 @@ where
     /// Method allows client send PING message to the broker specified in the `ClientConfig`.
     /// If there is expectation for long running connection. Method should be executed
     /// regularly by the timer that counts down the session expiry interval.
-    pub async fn send_ping<'b>(&'b mut self) -> Result<(), ReasonCode> {
+    pub async fn send_ping(&mut self) -> Result<(), ReasonCode> {
         match self.config.mqtt_version {
             MqttVersion::MQTTv3 => Err(ReasonCode::UnsupportedProtocolVersion),
             MqttVersion::MQTTv5 => self.send_ping_v5().await,
         }
     }
 
-    pub async fn poll<'b, const MAX_TOPICS: usize>(&'b mut self) -> Result<Event<'b>, ReasonCode> {
+    pub fn ready_to_pool(&mut self) -> bool {
+        self.connection.as_mut().is_some_and(|c| c.receive_ready())
+    }
+
+    pub async fn poll<const MAX_TOPICS: usize>(&mut self) -> Result<Event, ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
         }
@@ -336,7 +341,7 @@ where
                 Err(ReasonCode::ImplementationSpecificError)
             }
             PacketType::Connack => {
-                let mut packet = ConnackPacket::<'b, MAX_PROPERTIES>::new();
+                let mut packet = ConnackPacket::<MAX_PROPERTIES>::new();
                 if let Err(err) = packet.decode(&mut BuffReader::new(self.buffer, read)) {
                     // if err == BufferError::PacketTypeMismatch {
                     //     let mut disc = DisconnectPacket::<'b, MAX_PROPERTIES>::new();
@@ -355,7 +360,7 @@ where
             }
             PacketType::Puback => {
                 let reason: Result<[u16; 2], BufferError> = {
-                    let mut packet = PubackPacket::<'b, MAX_PROPERTIES>::new();
+                    let mut packet = PubackPacket::<MAX_PROPERTIES>::new();
                     packet
                         .decode(&mut BuffReader::new(self.buffer, read))
                         .map(|_| [packet.packet_identifier, packet.reason_code as u16])
@@ -376,7 +381,7 @@ where
             }
             PacketType::Suback => {
                 let reason: Result<(u16, Vec<u8, MAX_TOPICS>), BufferError> = {
-                    let mut packet = SubackPacket::<'b, MAX_TOPICS, MAX_PROPERTIES>::new();
+                    let mut packet = SubackPacket::<MAX_TOPICS, MAX_PROPERTIES>::new();
                     packet
                         .decode(&mut BuffReader::new(self.buffer, read))
                         .map(|_| (packet.packet_identifier, packet.reason_codes))
@@ -399,7 +404,7 @@ where
             }
             PacketType::Unsuback => {
                 let res: Result<u16, BufferError> = {
-                    let mut packet = UnsubackPacket::<'b, 1, MAX_PROPERTIES>::new();
+                    let mut packet = UnsubackPacket::<1, MAX_PROPERTIES>::new();
                     packet
                         .decode(&mut BuffReader::new(self.buffer, read))
                         .map(|_| packet.packet_identifier)
@@ -422,7 +427,7 @@ where
                 }
             }
             PacketType::Publish => {
-                let mut packet = PublishPacket::<'b, 5>::new();
+                let mut packet = PublishPacket::<5>::new();
                 if let Err(err) = { packet.decode(&mut BuffReader::new(self.buffer, read)) } {
                     // if err == BufferError::PacketTypeMismatch {
                     //     let mut disc = DisconnectPacket::<'b, 5>::new();
@@ -438,7 +443,7 @@ where
                 if (packet.fixed_header & 0x06)
                     == <QualityOfService as Into<u8>>::into(QualityOfService::QoS1)
                 {
-                    let mut puback = PubackPacket::<'b, MAX_PROPERTIES>::new();
+                    let mut puback = PubackPacket::<MAX_PROPERTIES>::new();
                     puback.packet_identifier = packet.packet_identifier;
                     puback.reason_code = 0x00;
                     {
@@ -457,7 +462,7 @@ where
                 ))
             }
             PacketType::Disconnect => {
-                let mut disc = DisconnectPacket::<'b, 5>::new();
+                let mut disc = DisconnectPacket::<5>::new();
                 let res = disc.decode(&mut BuffReader::new(self.buffer, read));
 
                 match res {
@@ -473,7 +478,7 @@ where
 }
 
 #[cfg(not(feature = "tls"))]
-async fn receive_packet<'c, T: Read + Write>(
+async fn receive_packet<'c, T: Read + Write + ReadReady>(
     buffer: &mut [u8],
     buffer_len: usize,
     recv_buffer: &mut [u8],
